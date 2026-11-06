@@ -1,0 +1,250 @@
+interface Env {
+  CHAT_DB: D1Database;
+  CHAT_IMAGES: R2Bucket;
+  CHAT_ROOM: DurableObjectNamespace;
+  ASSETS: Fetcher;
+  MAX_IMAGE_BYTES: string;
+  MESSAGE_LIMIT: string;
+}
+type J = Record<string, unknown>;
+const json = (data: unknown, status=200) => new Response(JSON.stringify(data), {status, headers:{"content-type":"application/json; charset=utf-8","cache-control":"no-store"}});
+const now = () => Date.now();
+const id = () => crypto.randomUUID();
+const text = (v: unknown, max=500) => typeof v === "string" ? v.trim().slice(0,max) : "";
+async function sha(value:string) {
+  const b = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
+  return [...new Uint8Array(b)].map(x=>x.toString(16).padStart(2,"0")).join("");
+}
+function anon(req:Request) { return text(req.headers.get("x-anonymous-id"),80); }
+function ipHash(req:Request) {
+  // Store a keyed hash rather than a readable IP. Set IP_HASH_SALT as a Worker secret.
+  return req.headers.get("cf-connecting-ip") || "unknown";
+}
+async function getIpHash(req:Request, env:Env) {
+  const ip=ipHash(req);
+  const salt=(env as Env & {IP_HASH_SALT?:string}).IP_HASH_SALT;
+  return sha(`${salt || "SET_A_REAL_SECRET"}:${ip}`);
+}
+function isAdmin(req:Request) {
+  // Cloudflare Access must protect /admin/* and inject these headers.
+  return !!req.headers.get("cf-access-authenticated-user-email");
+}
+async function audit(env:Env, req:Request, action:string, target?:string) {
+  await env.CHAT_DB.prepare("INSERT INTO admin_audit_logs(id,admin_email,action,target_id,created_at) VALUES(?,?,?,?,?)")
+    .bind(id(), req.headers.get("cf-access-authenticated-user-email"), action, target||null, now()).run();
+}
+async function event(env:Env, req:Request, type:string, severity:string, details:string, user=anon(req)) {
+  await env.CHAT_DB.prepare("INSERT INTO security_events(id,event_type,severity,anon_id,ip_hash,details,created_at) VALUES(?,?,?,?,?,?,?)")
+    .bind(id(),type,severity,user||null,await getIpHash(req,env),details.slice(0,300),now()).run();
+}
+async function sanctions(env:Env, user:string, ipHashValue:string) {
+  const t=now();
+  return env.CHAT_DB.prepare(`SELECT type,ends_at,reason FROM sanctions WHERE active=1 AND starts_at<=?
+    AND (ends_at IS NULL OR ends_at>?) AND (user_id=? OR (ip_hash IS NOT NULL AND ip_hash=?))`)
+    .bind(t,t,user,ipHashValue).all<{type:string;ends_at:number|null;reason:string}>();
+}
+async function recordVisit(env:Env, req:Request, status:number) {
+  // Privacy-minimized security analytics: hashed IP only, 7-day retention.
+  await env.CHAT_DB.prepare("INSERT INTO visitor_logs(id,ip_hash,anon_id,path,method,status,created_at) VALUES(?,?,?,?,?,?,?)")
+    .bind(id(),await getIpHash(req,env),anon(req)||null,new URL(req.url).pathname.slice(0,160),req.method,status,now()).run();
+  await env.CHAT_DB.prepare("DELETE FROM visitor_logs WHERE created_at < ?").bind(now()-7*86400000).run();
+}
+async function handleApi(req:Request, env:Env):Promise<Response> {
+  const url=new URL(req.url), path=url.pathname, user=anon(req);
+  const iph=await getIpHash(req,env);
+  if (path.startsWith("/api/") && !user && !path.startsWith("/api/admin/")) return json({error:"Missing X-Anonymous-ID"},400);
+  if (path==="/api/register" && req.method==="POST") {
+    const body=await req.json() as J, nickname=text(body.nickname,24);
+    if (!/^[\p{L}\p{N}_ -]{2,24}$/u.test(nickname)) return json({error:"昵称需为 2–24 个字母、数字或常用字符"},400);
+    await env.CHAT_DB.prepare("INSERT INTO users(anon_id,nickname,created_at,last_seen) VALUES(?,?,?,?) ON CONFLICT(anon_id) DO UPDATE SET nickname=excluded.nickname,last_seen=excluded.last_seen")
+      .bind(user,nickname,now(),now()).run();
+    return json({ok:true,nickname});
+  }
+  if (path==="/api/sanction-check") {
+    const rows=await sanctions(env,user,iph);
+    return json({blocked:rows.results.some(x=>x.type==="ban"||x.type==="ip_ban"),muted:rows.results.some(x=>x.type==="mute"),sanctions:rows.results.map(x=>({type:x.type,endsAt:x.ends_at,reason:x.reason}))});
+  }
+  if (path==="/api/dm" && req.method==="POST") {
+    const b=await req.json() as J, to=text(b.to,80), body=text(b.body,2000);
+    if (!to||!body) return json({error:"收件人和消息不能为空"},400);
+    const s=await sanctions(env,user,iph); if(s.results.length) return json({error:"当前账号受到限制"},403);
+    const target=await env.CHAT_DB.prepare("SELECT anon_id FROM users WHERE anon_id=?").bind(to).first();
+    if(!target) return json({error:"用户不存在"},404);
+    const mid=id();
+    await env.CHAT_DB.prepare("INSERT INTO private_messages(id,sender_id,recipient_id,body,created_at) VALUES(?,?,?,?,?)").bind(mid,user,to,body,now()).run();
+    return json({ok:true,id:mid});
+  }
+  if(path==="/api/dm" && req.method==="GET") {
+    const other=text(url.searchParams.get("with"),80);
+    const rows=await env.CHAT_DB.prepare(`SELECT id,sender_id,recipient_id,body,created_at FROM private_messages
+      WHERE (sender_id=? AND recipient_id=?) OR (sender_id=? AND recipient_id=?) ORDER BY created_at DESC LIMIT 100`)
+      .bind(user,other,other,user).all();
+    return json({messages:rows.results.reverse()});
+  }
+  if(path==="/api/users" && req.method==="GET") {
+    const rows=await env.CHAT_DB.prepare("SELECT anon_id,nickname,last_seen FROM users WHERE last_seen>? ORDER BY nickname LIMIT 100").bind(now()-90000).all();
+    return json({users:rows.results});
+  }
+  if(path==="/api/report" && req.method==="POST") {
+    const b=await req.json() as J, target=text(b.targetUserId,80), reason=text(b.reason,500);
+    if(!target||!reason) return json({error:"请填写举报对象和理由"},400);
+    const rid=id();
+    await env.CHAT_DB.prepare("INSERT INTO reports(id,reporter_id,target_user_id,target_type,target_id,reason,created_at) VALUES(?,?,?,?,?,?,?)")
+      .bind(rid,user,target,text(b.targetType,20)||"user",text(b.targetId,80)||null,reason,now()).run();
+    await event(env,req,"report_submitted","info","A report was submitted.");
+    return json({ok:true,id:rid});
+  }
+  if(path==="/api/notices" && req.method==="GET") {
+    const rows=await env.CHAT_DB.prepare("SELECT id,report_id,title,result,note,created_at,read_at FROM notices WHERE user_id=? ORDER BY created_at DESC LIMIT 50").bind(user).all();
+    return json({notices:rows.results});
+  }
+  if(path==="/api/notices/read" && req.method==="POST") {
+    const b=await req.json() as J;
+    await env.CHAT_DB.prepare("UPDATE notices SET read_at=? WHERE id=? AND user_id=?").bind(now(),text(b.id,80),user).run();
+    return json({ok:true});
+  }
+  if(path==="/api/image" && req.method==="POST") {
+    const sanctionsNow=await sanctions(env,user,iph); if(sanctionsNow.results.length) return json({error:"当前账号受到限制"},403);
+    const type=req.headers.get("content-type")||"";
+    if(!["image/jpeg","image/png","image/webp"].includes(type)) return json({error:"仅支持 JPEG、PNG、WebP"},415);
+    const bytes=await req.arrayBuffer(), max=Number(env.MAX_IMAGE_BYTES||5242880);
+    if(bytes.byteLength>max) return json({error:"图片不能超过 5 MB"},413);
+    // Verify file signatures rather than trusting the MIME header alone.
+    const a=new Uint8Array(bytes);
+    const jpeg=a[0]===255&&a[1]===216&&a[2]===255;
+    const png=a.slice(0,8).join(",")==="137,80,78,71,13,10,26,10";
+    const webp=String.fromCharCode(...a.slice(0,4))==="RIFF"&&String.fromCharCode(...a.slice(8,12))==="WEBP";
+    if(!(jpeg||png||webp)) return json({error:"图片格式校验失败"},415);
+    const key=`${user}/${id()}.${type==="image/jpeg"?"jpg":type==="image/png"?"png":"webp"}`;
+    await env.CHAT_IMAGES.put(key,bytes,{httpMetadata:{contentType:type,cacheControl:"public, max-age=86400"}});
+    return json({ok:true,url:`/image/${key}`});
+  }
+  if(path.startsWith("/image/") && req.method==="GET") {
+    const key=decodeURIComponent(path.slice(7));
+    const obj=await env.CHAT_IMAGES.get(key); if(!obj) return new Response("Not found",{status:404});
+    return new Response(obj.body,{headers:{"content-type":obj.httpMetadata?.contentType||"application/octet-stream","x-content-type-options":"nosniff","cache-control":"private, max-age=3600"}});
+  }
+  if(path.startsWith("/api/admin/")) {
+    if(!isAdmin(req)) { await event(env,req,"admin_unauthorized","high","Rejected request to admin API."); return json({error:"Access denied"},403); }
+    if(path==="/api/admin/reports") {
+      const rows=await env.CHAT_DB.prepare("SELECT * FROM reports ORDER BY CASE status WHEN 'pending' THEN 0 ELSE 1 END,created_at DESC LIMIT 200").all();
+      return json({reports:rows.results});
+    }
+    if(path==="/api/admin/visitors") {
+      const rows=await env.CHAT_DB.prepare("SELECT id,substr(ip_hash,1,16) AS ip_fingerprint,anon_id,path,method,status,created_at FROM visitor_logs ORDER BY created_at DESC LIMIT 200").all();
+      return json({visitors:rows.results});
+    }
+    if(path==="/api/admin/security") {
+      const rows=await env.CHAT_DB.prepare("SELECT * FROM security_events ORDER BY created_at DESC LIMIT 200").all();
+      return json({events:rows.results});
+    }
+    if(path==="/api/admin/sanctions") {
+      const rows=await env.CHAT_DB.prepare("SELECT id,user_id,type,reason,starts_at,ends_at,active,report_id FROM sanctions ORDER BY starts_at DESC LIMIT 200").all();
+      return json({sanctions:rows.results});
+    }
+    if(path==="/api/admin/report/resolve" && req.method==="POST") {
+      const b=await req.json() as J, rid=text(b.reportId,80), action=text(b.action,20), targetNote=text(b.targetNote,1000), reporterNote=text(b.reporterNote,1000), publicResult=text(b.publicResult,500), reason=text(b.reason,500)||"违反聊天室规则";
+      const report=await env.CHAT_DB.prepare("SELECT * FROM reports WHERE id=?").bind(rid).first<any>();
+      if(!report) return json({error:"举报不存在"},404);
+      const allowed=["none","warning","mute","ban","ip_ban"];
+      if(!allowed.includes(action)) return json({error:"处罚类型无效"},400);
+      let ends:number|null=null;
+      const duration=Number(b.durationMs||0); if(duration>0) ends=now()+Math.min(duration,30*86400000);
+      if(["mute","ban","ip_ban"].includes(action)) {
+        const sid=id(), targetIp=action==="ip_ban" ? await env.CHAT_DB.prepare("SELECT ip_hash FROM visitor_logs WHERE anon_id=? ORDER BY created_at DESC LIMIT 1").bind(report.target_user_id).first<any>() : null;
+        await env.CHAT_DB.prepare("INSERT INTO sanctions(id,user_id,ip_hash,type,reason,starts_at,ends_at,report_id,created_by) VALUES(?,?,?,?,?,?,?,?,?)")
+          .bind(sid,action==="ip_ban"?null:report.target_user_id,targetIp?.ip_hash||null,action,reason,now(),ends,rid,req.headers.get("cf-access-authenticated-user-email")).run();
+      }
+      await env.CHAT_DB.prepare("UPDATE reports SET status='resolved',public_result=?,reporter_note=?,target_note=?,internal_note=?,handled_at=? WHERE id=?")
+        .bind(publicResult,reporterNote,targetNote,text(b.internalNote,1500),now(),rid).run();
+      const result=`${action}${ends?`，到期时间 ${new Date(ends).toISOString()}`:""}`;
+      await env.CHAT_DB.prepare("INSERT INTO notices(id,user_id,report_id,title,result,note,created_at) VALUES(?,?,?,?,?,?,?)")
+        .bind(id(),report.reporter_id,rid,"举报处理结果",result,reporterNote||publicResult,now()).run();
+      await env.CHAT_DB.prepare("INSERT INTO notices(id,user_id,report_id,title,result,note,created_at) VALUES(?,?,?,?,?,?,?)")
+        .bind(id(),report.target_user_id,rid,"处罚处理结果",result,targetNote||publicResult,now()).run();
+      await audit(env,req,"resolve_report",rid);
+      return json({ok:true});
+    }
+    if(path==="/api/admin/sanction/revoke" && req.method==="POST") {
+      const b=await req.json() as J, sid=text(b.id,80);
+      await env.CHAT_DB.prepare("UPDATE sanctions SET active=0 WHERE id=?").bind(sid).run();
+      await audit(env,req,"revoke_sanction",sid); return json({ok:true});
+    }
+    if(path==="/api/admin/user/ban" && req.method==="POST") {
+      const b=await req.json() as J, target=text(b.userId,80), reason=text(b.reason,500);
+      if(!target||!reason) return json({error:"需要用户 ID 和原因"},400);
+      await env.CHAT_DB.prepare("INSERT INTO sanctions(id,user_id,type,reason,starts_at,ends_at,created_by) VALUES(?,?,?,?,?,?,?)")
+        .bind(id(),target,"ban",reason,now(),b.permanent?null:now()+86400000,req.headers.get("cf-access-authenticated-user-email")).run();
+      await audit(env,req,"ban_user",target); return json({ok:true});
+    }
+    if(path==="/api/admin/ip/ban" && req.method==="POST") {
+      // IP-level sanctions require a previously observed IP fingerprint; raw IPs are never accepted or displayed.
+      const b=await req.json() as J, fingerprint=text(b.fingerprint,64), reason=text(b.reason,500);
+      if(!/^[a-f0-9]{64}$/.test(fingerprint)||!reason) return json({error:"需要有效的 IP 指纹和原因"},400);
+      await env.CHAT_DB.prepare("INSERT INTO sanctions(id,ip_hash,type,reason,starts_at,ends_at,created_by) VALUES(?,?,?,?,?,?,?)")
+        .bind(id(),fingerprint,"ip_ban",reason,now(),now()+86400000,req.headers.get("cf-access-authenticated-user-email")).run();
+      await audit(env,req,"ip_ban_fingerprint",fingerprint.slice(0,16)); return json({ok:true});
+    }
+  }
+  return json({error:"Not found"},404);
+}
+export class ChatRoom {
+  state: DurableObjectState; env: Env;
+  constructor(state:DurableObjectState,env:Env){this.state=state;this.env=env;}
+  async fetch(req:Request) {
+    const url=new URL(req.url);
+    if(url.pathname==="/ws") {
+      if(req.headers.get("Upgrade")!=="websocket") return new Response("Expected websocket",{status:426});
+      const pair=new WebSocketPair(); const client=pair[0], server=pair[1];
+      server.accept();
+      const user=url.searchParams.get("u")||"";
+      server.serializeAttachment({user,last:now()});
+      server.addEventListener("message",async ev=>{
+        try {
+          const msg=JSON.parse(String(ev.data));
+          if(msg.type==="ping"){server.send(JSON.stringify({type:"pong",at:now()}));return;}
+          if(msg.type!=="chat"||typeof msg.body!=="string")return;
+          const body=text(msg.body,Number(this.env.MESSAGE_LIMIT||500)); if(!body)return;
+          const record={type:"chat",id:id(),user,nickname:text(msg.nickname,24),body,at:now()};
+          await this.state.storage.put(`msg:${record.id}`,record);
+          const keys=await this.state.storage.list({prefix:"msg:"});
+          if(keys.size>300){const oldest=[...keys.keys()].sort().slice(0,keys.size-300);for(const k of oldest)await this.state.storage.delete(k);}
+          const sockets=this.state.getWebSockets();
+          for(const ws of sockets){try{ws.send(JSON.stringify(record));}catch{}}
+        } catch {}
+      });
+      server.addEventListener("close",()=>{this.broadcastPresence();});
+      server.addEventListener("error",()=>{this.broadcastPresence();});
+      const history=await this.state.storage.list({prefix:"msg:"});
+      server.send(JSON.stringify({type:"history",messages:[...history.values()].sort((a:any,b:any)=>a.at-b.at)}));
+      await this.broadcastPresence();
+      return new Response(null,{status:101,webSocket:client});
+    }
+    return json({online:this.state.getWebSockets().length});
+  }
+  async broadcastPresence(){const count=this.state.getWebSockets().length;for(const ws of this.state.getWebSockets()){try{ws.send(JSON.stringify({type:"presence",count}));}catch{}}}
+}
+export default {
+ async fetch(req:Request,env:Env,ctx:ExecutionContext):Promise<Response>{
+   const url=new URL(req.url);
+   let response:Response;
+   if(url.pathname==="/ws"){
+     const stub=env.CHAT_ROOM.get(env.CHAT_ROOM.idFromName("main"));
+     const u=anon(req);
+     response=await stub.fetch(new Request(`https://room/ws?u=${encodeURIComponent(u)}`,req));
+   } else if(url.pathname.startsWith("/api/")||url.pathname.startsWith("/image/")) {
+     response=await handleApi(req,env);
+   } else if(url.pathname.startsWith("/admin")) {
+     if(!isAdmin(req)) response=new Response("Admin access required",{status:403});
+     else response=await env.ASSETS.fetch(new Request(new URL("/admin.html",req.url),req));
+   } else response=await env.ASSETS.fetch(req);
+   const headers=new Headers(response.headers);
+   headers.set("x-content-type-options","nosniff");
+   headers.set("referrer-policy","no-referrer");
+   headers.set("permissions-policy","camera=(), microphone=(), geolocation=()");
+   headers.set("content-security-policy","default-src 'self'; img-src 'self' blob: data:; connect-src 'self' wss: https:; style-src 'self' 'unsafe-inline'; script-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'");
+   const secured=new Response(response.body,{status:response.status,statusText:response.statusText,headers});
+   if(!url.pathname.startsWith("/api/admin/")) ctx.waitUntil(recordVisit(env,req,response.status).catch(()=>{}));
+   return secured;
+ }
+};

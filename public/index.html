@@ -1,0 +1,9 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>匿名聊天室</title><link rel="stylesheet" href="/style.css"></head>
+<body><main class="shell"><header><div><h1>匿名聊天室</h1><p>不需要注册账号 · 请勿分享个人隐私</p></div><span id="online" class="pill">连接中…</span></header>
+<section class="bar"><input id="nickname" maxlength="24" placeholder="你的匿名昵称"><button id="join">进入聊天室</button><button id="notices">通知 <span id="unread"></span></button><a href="/admin">管理后台</a></section>
+<section id="noticeBox" class="panel hidden"></section>
+<section class="layout"><aside class="panel"><h2>在线用户</h2><div id="users">进入后显示在线用户</div><p class="hint">在线状态可能有短暂延迟。</p></aside>
+<section class="panel chat"><div id="messages" aria-live="polite"></div><div class="compose"><textarea id="message" maxlength="500" placeholder="输入消息（最多 500 字）"></textarea><div class="tools"><label class="file">发送图片<input id="image" type="file" accept="image/jpeg,image/png,image/webp"></label><button id="send">发送</button></div></div></section></section>
+<section class="panel"><h2>私信 / 举报</h2><p>点击在线用户的“私信”或“举报”。</p><div id="dmBox" class="hidden"><h3 id="dmTitle">私信</h3><div id="dmMessages"></div><textarea id="dmText" maxlength="2000" placeholder="私信内容"></textarea><button id="dmSend">发送私信</button></div></section>
+<p class="hint">匿名昵称不等于绝对匿名。请勿发送真实姓名、学校、住址、电话或其他个人信息。</p></main><script src="/app.js"></script></body></html>
