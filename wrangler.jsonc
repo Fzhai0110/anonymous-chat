@@ -7,6 +7,4 @@
   "durable_objects": { "bindings": [{ "name": "CHAT_ROOM", "class_name": "ChatRoom" }] },
   "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ChatRoom"] }],
   "d1_databases": [{ "binding": "CHAT_DB", "database_name": "anonymous-chat-db", "database_id": "3d9baa8e-6dbd-48a3-8365-5d493aa464e3" }],
-  "r2_buckets": [{ "binding": "CHAT_IMAGES", "bucket_name": "anonymous-chat-images" }],
-  "vars": { "MAX_IMAGE_BYTES": "5242880", "MESSAGE_LIMIT": "500" }
-}
+
