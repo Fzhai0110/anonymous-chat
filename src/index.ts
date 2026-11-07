@@ -167,42 +167,119 @@ async function handleApi(req:Request, env:Env):Promise<Response> {
   }
   return json({error:"Not found"},404);
 }
+
 export class ChatRoom {
-  state: DurableObjectState; env: Env;
-  constructor(state:DurableObjectState,env:Env){this.state=state;this.env=env;}
-  async fetch(req:Request) {
-    const url=new URL(req.url);
-    if(url.pathname==="/ws") {
-      if(req.headers.get("Upgrade")!=="websocket") return new Response("Expected websocket",{status:426});
-      const pair=new WebSocketPair(); const client=pair[0], server=pair[1];
+  state: DurableObjectState;
+  env: Env;
+  sockets: Set<WebSocket>;
+
+  constructor(state: DurableObjectState, env: Env) {
+    this.state = state;
+    this.env = env;
+    this.sockets = new Set();
+  }
+
+  async fetch(req: Request) {
+    const url = new URL(req.url);
+
+    if (url.pathname === "/ws") {
+      if (req.headers.get("Upgrade") !== "websocket") {
+        return new Response("Expected websocket", { status: 426 });
+      }
+
+      const pair = new WebSocketPair();
+      const client = pair[0];
+      const server = pair[1];
+
       server.accept();
-      const user=url.searchParams.get("u")||"";
-      server.serializeAttachment({user,last:now()});
-      server.addEventListener("message",async ev=>{
+      this.sockets.add(server);
+
+      const user = url.searchParams.get("u") || "";
+      server.serializeAttachment({ user, last: now() });
+
+      server.addEventListener("message", async ev => {
         try {
-          const msg=JSON.parse(String(ev.data));
-          if(msg.type==="ping"){server.send(JSON.stringify({type:"pong",at:now()}));return;}
-          if(msg.type!=="chat"||typeof msg.body!=="string")return;
-          const body=text(msg.body,Number(this.env.MESSAGE_LIMIT||500)); if(!body)return;
-          const record={type:"chat",id:id(),user,nickname:text(msg.nickname,24),body,at:now()};
-          await this.state.storage.put(`msg:${record.id}`,record);
-          const keys=await this.state.storage.list({prefix:"msg:"});
-          if(keys.size>300){const oldest=[...keys.keys()].sort().slice(0,keys.size-300);for(const k of oldest)await this.state.storage.delete(k);}
-          const sockets=this.state.getWebSockets();
-          for(const ws of sockets){try{ws.send(JSON.stringify(record));}catch{}}
+          const msg = JSON.parse(String(ev.data));
+
+          if (msg.type === "ping") {
+            server.send(JSON.stringify({ type: "pong", at: now() }));
+            return;
+          }
+
+          if (msg.type !== "chat" || typeof msg.body !== "string") return;
+
+          const body = text(msg.body, Number(this.env.MESSAGE_LIMIT || 500));
+          if (!body) return;
+
+          const record = {
+            type: "chat",
+            id: id(),
+            user,
+            nickname: text(msg.nickname, 24),
+            body,
+            at: now()
+          };
+
+          await this.state.storage.put(`msg:${record.id}`, record);
+
+          const keys = await this.state.storage.list({ prefix: "msg:" });
+
+          if (keys.size > 300) {
+            const oldest = [...keys.keys()].sort().slice(0, keys.size - 300);
+            for (const k of oldest) {
+              await this.state.storage.delete(k);
+            }
+          }
+
+          for (const ws of this.sockets) {
+            try {
+              ws.send(JSON.stringify(record));
+            } catch {}
+          }
         } catch {}
       });
-      server.addEventListener("close",()=>{this.broadcastPresence();});
-      server.addEventListener("error",()=>{this.broadcastPresence();});
-      const history=await this.state.storage.list({prefix:"msg:"});
-      server.send(JSON.stringify({type:"history",messages:[...history.values()].sort((a:any,b:any)=>a.at-b.at)}));
+
+      server.addEventListener("close", () => {
+        this.sockets.delete(server);
+        this.broadcastPresence();
+      });
+
+      server.addEventListener("error", () => {
+        this.sockets.delete(server);
+        this.broadcastPresence();
+      });
+
+      const history = await this.state.storage.list({ prefix: "msg:" });
+
+      server.send(JSON.stringify({
+        type: "history",
+        messages: [...history.values()].sort(
+          (a: any, b: any) => a.at - b.at
+        )
+      }));
+
       await this.broadcastPresence();
-      return new Response(null,{status:101,webSocket:client});
+
+      return new Response(null, {
+        status: 101,
+        webSocket: client
+      });
     }
-    return json({online:this.state.getWebSockets().length});
+
+    return json({ online: this.sockets.size });
   }
-  async broadcastPresence(){const count=this.state.getWebSockets().length;for(const ws of this.state.getWebSockets()){try{ws.send(JSON.stringify({type:"presence",count}));}catch{}}}
+
+  async broadcastPresence() {
+    const count = this.sockets.size;
+
+    for (const ws of this.sockets) {
+      try {
+        ws.send(JSON.stringify({ type: "presence", count }));
+      } catch {}
+    }
+  }
 }
+
 export default {
  async fetch(req:Request,env:Env,ctx:ExecutionContext):Promise<Response>{
    const url=new URL(req.url);
