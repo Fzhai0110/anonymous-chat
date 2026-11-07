@@ -1,4 +1,3 @@
-
 const $=s=>document.querySelector(s);
 
 let uid=localStorage.getItem("anon-chat-id");
@@ -48,7 +47,7 @@ function addMsg(m){
 
   el.append(who,body,time);
 
-  // 给每条聊天消息添加举报按钮
+  // 给其他用户的聊天消息添加举报按钮
   if(m.user && m.user!==uid){
     const rep=document.createElement("button");
     rep.type="button";
@@ -117,8 +116,9 @@ async function join(){
 
   const scheme=location.protocol==="https:"?"wss":"ws";
 
+  // 修改：WebSocket 连接附带匿名用户 ID
   ws=new WebSocket(
-    `${scheme}://${location.host}/ws`
+    `${scheme}://${location.host}/ws?u=${encodeURIComponent(uid)}`
   );
 
   ws.onopen=()=>{
@@ -295,6 +295,7 @@ $("#notices").onclick=()=>{
 setInterval(()=>{
   if(uid)refreshUsers();
 },15000);
+
 setInterval(()=>{
   if(uid && nickname && ws && ws.readyState===1){
     api("/api/register",{
