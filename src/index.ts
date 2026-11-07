@@ -85,7 +85,7 @@ async function isAdmin(req: Request, env: Env): Promise<boolean> {
 }
 async function audit(env:Env, req:Request, action:string, target?:string) {
   await env.CHAT_DB.prepare("INSERT INTO admin_audit_logs(id,admin_email,action,target_id,created_at) VALUES(?,?,?,?,?)")
-    .bind(id(), req.headers.get("cf-access-authenticated-user-email"), action, target||null, now()).run();
+    .bind(id(), "local-admin", action, target||null, now()).run();
 }
 async function event(env:Env, req:Request, type:string, severity:string, details:string, user=anon(req)) {
   await env.CHAT_DB.prepare("INSERT INTO security_events(id,event_type,severity,anon_id,ip_hash,details,created_at) VALUES(?,?,?,?,?,?,?)")
