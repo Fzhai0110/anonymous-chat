@@ -295,3 +295,12 @@ $("#notices").onclick=()=>{
 setInterval(()=>{
   if(uid)refreshUsers();
 },15000);
+setInterval(()=>{
+  if(uid && nickname && ws && ws.readyState===1){
+    api("/api/register",{
+      method:"POST",
+      headers:{"content-type":"application/json"},
+      body:JSON.stringify({nickname})
+    }).catch(()=>{});
+  }
+},30000);
