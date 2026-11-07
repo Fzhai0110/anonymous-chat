@@ -218,6 +218,7 @@ export default {
      else response=await env.ASSETS.fetch(new Request(new URL("/admin.html",req.url),req));
    } else response=await env.ASSETS.fetch(req);
    const headers=new Headers(response.headers);
+   if(url.pathname==="/ws") return response;
    headers.set("x-content-type-options","nosniff");
    headers.set("referrer-policy","no-referrer");
    headers.set("permissions-policy","camera=(), microphone=(), geolocation=()");
