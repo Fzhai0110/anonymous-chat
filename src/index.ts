@@ -1,4 +1,3 @@
-
 interface Env {
   CHAT_DB: D1Database;
   CHAT_IMAGES: R2Bucket;
@@ -904,7 +903,8 @@ export default {
         env.CHAT_ROOM.idFromName("main")
       );
 
-      const u=anon(req);
+      // 修改：优先读取请求头，否则从 WebSocket URL 查询参数读取用户 ID
+      const u=anon(req)||text(url.searchParams.get("u"),80);
 
       response=await stub.fetch(
         new Request(
