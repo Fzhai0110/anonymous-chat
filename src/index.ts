@@ -103,22 +103,6 @@ async function handleApi(req:Request, env:Env):Promise<Response> {
     await env.CHAT_DB.prepare("UPDATE notices SET read_at=? WHERE id=? AND user_id=?").bind(now(),text(b.id,80),user).run();
     return json({ok:true});
   }
-  if(path==="/api/image" && req.method==="POST") {
-    const sanctionsNow=await sanctions(env,user,iph); if(sanctionsNow.results.length) return json({error:"当前账号受到限制"},403);
-    const type=req.headers.get("content-type")||"";
-    if(!["image/jpeg","image/png","image/webp"].includes(type)) return json({error:"仅支持 JPEG、PNG、WebP"},415);
-    const bytes=await req.arrayBuffer(), max=Number(env.MAX_IMAGE_BYTES||5242880);
-    if(bytes.byteLength>max) return json({error:"图片不能超过 5 MB"},413);
-    // Verify file signatures rather than trusting the MIME header alone.
-    const a=new Uint8Array(bytes);
-    const jpeg=a[0]===255&&a[1]===216&&a[2]===255;
-    const png=a.slice(0,8).join(",")==="137,80,78,71,13,10,26,10";
-    const webp=String.fromCharCode(...a.slice(0,4))==="RIFF"&&String.fromCharCode(...a.slice(8,12))==="WEBP";
-    if(!(jpeg||png||webp)) return json({error:"图片格式校验失败"},415);
-    const key=`${user}/${id()}.${type==="image/jpeg"?"jpg":type==="image/png"?"png":"webp"}`;
-    await env.CHAT_IMAGES.put(key,bytes,{httpMetadata:{contentType:type,cacheControl:"public, max-age=86400"}});
-    return json({ok:true,url:`/image/${key}`});
-  }
   if(path.startsWith("/image/") && req.method==="GET") {
     const key=decodeURIComponent(path.slice(7));
     const obj=await env.CHAT_IMAGES.get(key); if(!obj) return new Response("Not found",{status:404});
