@@ -103,11 +103,6 @@ async function handleApi(req:Request, env:Env):Promise<Response> {
     await env.CHAT_DB.prepare("UPDATE notices SET read_at=? WHERE id=? AND user_id=?").bind(now(),text(b.id,80),user).run();
     return json({ok:true});
   }
-  if(path.startsWith("/image/") && req.method==="GET") {
-    const key=decodeURIComponent(path.slice(7));
-    const obj=await env.CHAT_IMAGES.get(key); if(!obj) return new Response("Not found",{status:404});
-    return new Response(obj.body,{headers:{"content-type":obj.httpMetadata?.contentType||"application/octet-stream","x-content-type-options":"nosniff","cache-control":"private, max-age=3600"}});
-  }
   if(path.startsWith("/api/admin/")) {
     if(!isAdmin(req)) { await event(env,req,"admin_unauthorized","high","Rejected request to admin API."); return json({error:"Access denied"},403); }
     if(path==="/api/admin/reports") {
