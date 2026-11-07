@@ -28,9 +28,60 @@ async function getIpHash(req:Request, env:Env) {
   const salt=(env as Env & {IP_HASH_SALT?:string}).IP_HASH_SALT;
   return sha(`${salt || "SET_A_REAL_SECRET"}:${ip}`);
 }
-function isAdmin(req:Request) {
-  // Cloudflare Access must protect /admin/* and inject these headers.
-  return !!req.headers.get("cf-access-authenticated-user-email");
+function base64url(bytes: Uint8Array): string {
+  let binary = "";
+  for (const b of bytes) binary += String.fromCharCode(b);
+  return btoa(binary)
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/, "");
+}
+
+async function signAdminSession(payload: string, secret: string) {
+  const key = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(secret),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"]
+  );
+
+  const signature = await crypto.subtle.sign(
+    "HMAC",
+    key,
+    new TextEncoder().encode(payload)
+  );
+
+  return base64url(new Uint8Array(signature));
+}
+
+async function isAdmin(req: Request, env: Env): Promise<boolean> {
+  try {
+    const cookie = req.headers.get("Cookie") || "";
+    const match = cookie.match(/(?:^|;\s*)admin_session=([^;]+)/);
+    if (!match) return false;
+
+    const parts = match[1].split(".");
+    if (parts.length !== 2) return false;
+
+    const [payload, signature] = parts;
+    const expected = await signAdminSession(
+      payload,
+      env.ADMIN_SESSION_SECRET
+    );
+
+    if (signature !== expected) return false;
+
+    const decoded = atob(
+      payload.replace(/-/g, "+").replace(/_/g, "/")
+    );
+
+    const session = JSON.parse(decoded);
+
+    return Number.isFinite(session.exp) && session.exp > now();
+  } catch {
+    return false;
+  }
 }
 async function audit(env:Env, req:Request, action:string, target?:string) {
   await env.CHAT_DB.prepare("INSERT INTO admin_audit_logs(id,admin_email,action,target_id,created_at) VALUES(?,?,?,?,?)")
@@ -55,6 +106,62 @@ async function recordVisit(env:Env, req:Request, status:number) {
 async function handleApi(req:Request, env:Env):Promise<Response> {
   const url=new URL(req.url), path=url.pathname, user=anon(req);
   const iph=await getIpHash(req,env);
+    // 管理员登录
+  if (path === "/api/admin/login" && req.method === "POST") {
+    const origin = req.headers.get("Origin");
+    if (origin !== url.origin) {
+      return json({ error: "请求来源无效" }, 403);
+    }
+
+    const body = await req.json() as J;
+    const password = typeof body.password === "string"
+      ? body.password
+      : "";
+
+    if (
+      !env.ADMIN_PASSWORD ||
+      !env.ADMIN_SESSION_SECRET ||
+      password.length > 200 ||
+      password !== env.ADMIN_PASSWORD
+    ) {
+      return json({ error: "管理员密码错误" }, 401);
+    }
+
+    const payload = base64url(
+      new TextEncoder().encode(
+        JSON.stringify({ exp: now() + 8 * 60 * 60 * 1000 })
+      )
+    );
+
+    const signature = await signAdminSession(
+      payload,
+      env.ADMIN_SESSION_SECRET
+    );
+
+    return new Response(JSON.stringify({ ok: true }), {
+      headers: {
+        "content-type": "application/json; charset=utf-8",
+        "cache-control": "no-store",
+        "set-cookie": `admin_session=${payload}.${signature}; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=28800`
+      }
+    });
+  }
+
+  // 管理员退出
+  if (path === "/api/admin/logout" && req.method === "POST") {
+    return new Response(JSON.stringify({ ok: true }), {
+      headers: {
+        "content-type": "application/json; charset=utf-8",
+        "cache-control": "no-store",
+        "set-cookie": "admin_session=; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=0"
+      }
+    });
+  }
+
+  // 检查管理员登录状态
+  if (path === "/api/admin/me" && req.method === "GET") {
+    return json({ authenticated: await isAdmin(req, env) });
+  }
   if (path.startsWith("/api/") && !user && !path.startsWith("/api/admin/")) return json({error:"Missing X-Anonymous-ID"},400);
   if (path==="/api/register" && req.method==="POST") {
     const body=await req.json() as J, nickname=text(body.nickname,24);
@@ -106,12 +213,11 @@ async function handleApi(req:Request, env:Env):Promise<Response> {
     await env.CHAT_DB.prepare("UPDATE notices SET read_at=? WHERE id=? AND user_id=?").bind(now(),text(b.id,80),user).run();
     return json({ok:true});
   }
-  if(path.startsWith("/api/admin/")) {
-    if(!isAdmin(req)) { await event(env,req,"admin_unauthorized","high","Rejected request to admin API."); return json({error:"Access denied"},403); }
-    if(path==="/api/admin/reports") {
-      const rows=await env.CHAT_DB.prepare("SELECT * FROM reports ORDER BY CASE status WHEN 'pending' THEN 0 ELSE 1 END,created_at DESC LIMIT 200").all();
-      return json({reports:rows.results});
-    }
+if(path.startsWith("/api/admin/")) {
+  if(!await isAdmin(req,env)) {
+    await event(env,req,"admin_denied","medium","Admin access denied");
+    return json({error:"Access denied"},403);
+  }
     if(path==="/api/admin/visitors") {
       const rows=await env.CHAT_DB.prepare("SELECT id,substr(ip_hash,1,16) AS ip_fingerprint,anon_id,path,method,status,created_at FROM visitor_logs ORDER BY created_at DESC LIMIT 200").all();
       return json({visitors:rows.results});
@@ -284,27 +390,46 @@ export class ChatRoom {
 }
 
 export default {
- async fetch(req:Request,env:Env,ctx:ExecutionContext):Promise<Response>{
-   const url=new URL(req.url);
-   let response:Response;
-   if(url.pathname==="/ws"){
-     const stub=env.CHAT_ROOM.get(env.CHAT_ROOM.idFromName("main"));
-     const u=anon(req);
-     response=await stub.fetch(new Request(`https://room/ws?u=${encodeURIComponent(u)}`,req));
-   } else if(url.pathname.startsWith("/api/")||url.pathname.startsWith("/image/")) {
-     response=await handleApi(req,env);
-   } else if(url.pathname.startsWith("/admin")) {
-     if(!isAdmin(req)) response=new Response("Admin access required",{status:403});
-     else response=await env.ASSETS.fetch(new Request(new URL("/admin.html",req.url),req));
-   } else response=await env.ASSETS.fetch(req);
-   const headers=new Headers(response.headers);
-   if(url.pathname==="/ws") return response;
-   headers.set("x-content-type-options","nosniff");
-   headers.set("referrer-policy","no-referrer");
-   headers.set("permissions-policy","camera=(), microphone=(), geolocation=()");
-   headers.set("content-security-policy","default-src 'self'; img-src 'self' blob: data:; connect-src 'self' wss: https:; style-src 'self' 'unsafe-inline'; script-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'");
-   const secured=new Response(response.body,{status:response.status,statusText:response.statusText,headers});
-   if(!url.pathname.startsWith("/api/admin/")) ctx.waitUntil(recordVisit(env,req,response.status).catch(()=>{}));
-   return secured;
- }
+  async fetch(req:Request,env:Env,ctx:ExecutionContext):Promise<Response>{
+    const url=new URL(req.url);
+    let response:Response;
+
+    if(url.pathname==="/ws"){
+      const stub=env.CHAT_ROOM.get(env.CHAT_ROOM.idFromName("main"));
+      const u=anon(req);
+      response=await stub.fetch(new Request(`https://room/ws?u=${encodeURIComponent(u)}`,req));
+
+    } else if(url.pathname.startsWith("/api/")||url.pathname.startsWith("/image/")) {
+      response=await handleApi(req,env);
+
+    } else if(url.pathname==="/admin"||url.pathname==="/admin/") {
+      response=await env.ASSETS.fetch(
+        new Request(new URL("/admin.html",req.url),req)
+      );
+
+    } else {
+      response=await env.ASSETS.fetch(req);
+    }
+
+    const headers=new Headers(response.headers);
+
+    if(url.pathname==="/ws") return response;
+
+    headers.set("x-content-type-options","nosniff");
+    headers.set("referrer-policy","no-referrer");
+    headers.set("permissions-policy","camera=(), microphone=(), geolocation=()");
+    headers.set("content-security-policy","default-src 'self'; img-src 'self' blob: data:; connect-src 'self' wss: https:; style-src 'self' 'unsafe-inline'; script-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'");
+
+    const secured=new Response(response.body,{
+      status:response.status,
+      statusText:response.statusText,
+      headers
+    });
+
+    if(!url.pathname.startsWith("/api/admin/")) {
+      ctx.waitUntil(recordVisit(env,req,response.status).catch(()=>{}));
+    }
+
+    return secured;
+  }
 };
