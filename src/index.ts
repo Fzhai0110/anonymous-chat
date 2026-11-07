@@ -5,6 +5,9 @@ interface Env {
   ASSETS: Fetcher;
   MAX_IMAGE_BYTES: string;
   MESSAGE_LIMIT: string;
+  ADMIN_PASSWORD: string;
+  ADMIN_SESSION_SECRET: string;
+  IP_HASH_SALT: string;
 }
 type J = Record<string, unknown>;
 const json = (data: unknown, status=200) => new Response(JSON.stringify(data), {status, headers:{"content-type":"application/json; charset=utf-8","cache-control":"no-store"}});
