@@ -1,63 +1,159 @@
-# Anonymous Chat 3.0 — Cloudflare Workers starter
+Anonymous Chat 3.0
 
-这是一个整合型原型工程，面向初学者。它包含公共聊天室 WebSocket、最近 300 条公共消息、在线连接数、匿名浏览器 ID、私信 API、图片上传到 R2、举报提交、管理员举报处理、处罚记录、双方通知、访问安全日志和管理员操作审计。
+基于 Cloudflare Workers 的轻量匿名聊天室项目，使用 WebSocket、D1、R2 和 Durable Objects 提供聊天及管理功能。
 
-## 重要状态说明
-- 已编写：上述功能的基础代码与 D1 schema。
-- 尚未验证：`npm install`、TypeScript 类型检查、Wrangler 本地启动、Cloudflare 实际部署、D1/R2/Access 配置、多人端到端测试。
-- 当前在线人数统计 WebSocket 连接数，不是去重人数；在线用户列表根据最近活动时间展示，尚未做到严格实时的跨房间在线追踪。
-- 私信是持久化 API 轮询/读取模型，不是实时推送；尚未实现私信通知、已读状态 UI。
-- 举报处理页面当前提供基础查看和“警告并处理”按钮；其他处罚 API/表结构可扩展，但完整处罚表单 UI、申诉流程尚未完成。
-- 图片会上传并保存对象，但图片消息在大厅中目前以 URL 文本显示；需要补充图片卡片渲染和图片删除/举报联动。
-- IP 采用带盐 SHA-256 指纹保存，不保存明文 IP；后台只能查看指纹。IP 封禁 API 使用指纹，管理员需要从安全流程中获取准确指纹。不要把 IP 指纹当作真实身份。
-- 本工程不是安全审计完成的生产系统。先在测试环境部署，不要直接公开给陌生人使用。
+项目状态： 本项目仍在开发和测试中，尚未经过完整安全审计。公开使用前，请完成部署检查和安全测试。
 
-## 1. 准备
-安装 Node.js LTS 和电脑端终端。iPhone 可以浏览网站，但不适合首次部署。
-解压 ZIP 后，在项目目录执行：
-```bash
+功能介绍
+
+普通用户
+
+* 匿名浏览器 ID，无需注册账号。
+* 公共聊天室，支持 WebSocket 实时消息。
+* 昵称设置。
+* 私信 API，支持持久化消息。
+* 在线用户信息。
+* 图片上传至 Cloudflare R2。
+* 举报用户。
+* 查看相关处理通知。
+
+管理员
+
+* 独立管理员登录页面：/admin
+* 管理员密码登录。
+* 8 小时登录会话。
+* 安全退出登录。
+* Dashboard。
+* 举报管理。
+* 访问记录。
+* 安全中心。
+* 处罚记录。
+* 管理员 API 支持举报处理及处罚操作。
+
+注意：当前管理页面提供基础举报查看和“警告并处理”操作。完整处罚表单、申诉流程等仍需继续开发。
+
+技术架构
+
+技术	用途
+Cloudflare Workers	后端服务
+Cloudflare D1	数据库
+Cloudflare R2	图片存储
+Durable Objects	聊天连接管理
+TypeScript	后端代码
+JavaScript	前端逻辑
+Wrangler	本地开发与部署
+
+管理员登录
+
+访问：
+
+https://你的域名/admin
+
+输入管理员密码即可登录。
+
+需要在 Cloudflare Worker Secrets 中配置：
+
+* ADMIN_PASSWORD：管理员密码。
+* ADMIN_SESSION_SECRET：管理员会话签名密钥。
+* IP_HASH_SALT：IP 哈希盐值。
+
+管理员会话有效期为 8 小时。
+
+不要将这些 Secret 写入 GitHub 或公开分享。
+
+Cloudflare 资源配置
+
+需要准备：
+
+1. D1 数据库，绑定名称 CHAT_DB。
+2. R2 Bucket，绑定名称 CHAT_IMAGES。
+3. Durable Object，绑定名称 CHAT_ROOM，类名 ChatRoom。
+
+普通变量：
+
+* MAX_IMAGE_BYTES：图片大小限制，当前示例为 5242880。
+* MESSAGE_LIMIT：消息长度限制，当前示例为 500。
+
+请核对 wrangler.jsonc 中的数据库 ID、Worker 名称及所有资源绑定。
+
+本地开发
+
+需要安装 Node.js LTS 和 Wrangler。
+
+安装依赖：
+
 npm install
-```
 
-## 2. 创建 Cloudflare 资源
-登录 Cloudflare Dashboard：
-1. 创建 D1 数据库，名称 `anonymous-chat-db`。
-2. 创建 R2 bucket，名称 `anonymous-chat-images`。
-3. 在 `wrangler.jsonc` 中把 `REPLACE_WITH_D1_DATABASE_ID` 替换成 D1 页面显示的真实 Database ID。
-4. 在 Worker 设置中添加 Secret：`IP_HASH_SALT`，使用随机且长期保密的高强度值。
+登录 Cloudflare：
 
-## 3. 配置管理员 Cloudflare Access
-在 Cloudflare Zero Trust 中为 `/admin*` 和 `/api/admin/*` 配置 Access Application，只允许你的管理员邮箱。必须让 Access 对 Worker 请求注入 `Cf-Access-Authenticated-User-Email`。不要只依靠网页隐藏入口；后端 API 也检查该头。
-测试时确认未登录管理员访问 `/api/admin/reports` 返回 403，授权管理员访问成功。
-
-## 4. 数据库迁移与部署
-```bash
 npx wrangler login
-npm run db:remote
-npm run deploy
-```
-本地开发可执行：
-```bash
-npm run db:local
+
+本地运行：
+
 npm run dev
-```
-如果你修改了 Durable Object SQLite schema 或绑定，先阅读 Cloudflare Durable Objects migration 文档，不要随意重置生产数据。
 
-## 5. 安全测试清单
-- 两个不同浏览器使用不同匿名 ID：测试公共消息互通。
-- 刷新页面：确认公共历史保留。
-- 检查 WebSocket 断开后在线连接数是否恢复。
-- 尝试发送超长文本、空文本、频繁消息。
-- 尝试上传伪装成 JPEG 的非图片文件、超 5 MB 文件、SVG。
-- 普通用户访问 `/api/admin/reports` 应返回 403。
-- 用户 A 不应能读取用户 C 与用户 B 的私信；修改 `with` 参数进行越权测试。
-- 用户 A 不应能读取用户 B 的 notices；修改匿名 ID 测试。
-- 举报处理后，举报者和被举报者分别只能通过自己的匿名 ID 读取各自通知。
-- 测试 mute、ban、ip_ban 到期与解除。当前聊天 WebSocket 消息处理还需要补充每条消息的服务器端处罚检查，部署前必须补齐。
-- 检查管理员操作是否写入 `admin_audit_logs`。
-- 检查 visitor_logs 只保留 7 天，且其中没有明文 IP。
-- 检查 IP 级封禁不会因共享网络而误伤无关用户；建议先人工复核并短时限，不要自动处罚。
+应用远程数据库迁移：
 
-## 6. 隐私与安全限制
-匿名 ID 保存在浏览器 localStorage，清除网站数据会丢失；用户可以复制/伪造 ID，因此它不是可靠账号认证。私信与举报 API 需要在上线前加入更强的速率限制、会话签名和滥用防护。聊天内容和私信不是端到端加密。IP 指纹仍属于可关联的在线标识数据，应限制访问并制定保留期限。向访客清楚说明日志用途。
-Cloudflare automatic deployment setup.
+npm run db:remote
+
+部署：
+
+npm run deploy
+
+package.json 命令
+
+命令	作用
+npm run dev	本地开发
+npm run deploy	部署 Worker
+npm run db:local	本地数据库迁移
+npm run db:remote	远程数据库迁移
+npm run typecheck	TypeScript 类型检查
+
+部署前请检查 wrangler.jsonc 中的 name。当前仓库配置曾使用 chatbeta，请确认它与你准备部署的 Worker 一致，避免部署到错误的 Worker。
+
+安全测试清单
+
+* [ ]	两个浏览器之间可以正常聊天。
+* [ ]	刷新后公共消息历史正常。
+* [ ]	WebSocket 断开后连接数恢复。
+* [ ]	图片上传正常。
+* [ ]	私信只能由相关用户读取。
+* [ ]	举报可以正常提交。
+* [ ]	管理员可以查看举报。
+* [ ]	举报处理后通知正常。
+* [ ]	未登录用户无法访问管理员 API。
+* [ ]	退出登录后管理员会话失效。
+* [ ]	检查处罚到期和解除。
+* [ ]	检查管理员操作审计记录。
+
+隐私与安全说明
+
+* 匿名 ID 保存在浏览器 localStorage 中，不是可靠的账号身份认证。
+* 聊天消息和私信不是端到端加密。
+* IP 指纹是带盐哈希后的可关联标识，不等于真实身份。
+* 访问日志应限制访问权限，并制定数据保留期限。
+* 当前 visitor_logs 会清理超过 7 天的记录。
+* IP 封禁可能影响使用同一网络的其他用户，应谨慎使用。
+* 上线前仍需评估速率限制、滥用防护、数据备份和删除机制。
+
+本项目不应被视为经过完整安全审计的生产系统。请在获得许可的范围内使用。
+
+自动部署
+
+可以在 Cloudflare Dashboard 配置 GitHub 集成和 Workers Builds。
+
+请确认：
+
+* GitHub 仓库和分支正确。
+* Worker 名称正确。
+* Secrets 已配置。
+* D1、R2 和 Durable Objects 绑定正确。
+* 部署后完成基本功能测试。
+
+相关链接
+
+* GitHub：https://github.com/Fzhai0110/anonymous-chat
+* Cloudflare Workers：https://developers.cloudflare.com/workers/
+* Cloudflare D1：https://developers.cloudflare.com/d1/
+* Cloudflare R2：https://developers.cloudflare.com/r2/
+* Wrangler：https://developers.cloudflare.com/workers/wrangler/
