@@ -1,300 +1,802 @@
-Anonymous Chat 3.0
 
-基于 Cloudflare Workers 构建的轻量级匿名聊天室，使用 WebSocket、D1、R2 和 Durable Objects 提供聊天、图片上传及管理功能。
+# Anonymous Chat 3.0
 
-项目状态：开发与测试中
+<p align="center">
+  <strong>A Lightweight Anonymous Real-Time Chat Platform</strong>
+</p>
 
-项目尚未完成完整的安全审计。正式公开使用前，请检查 Cloudflare 配置、权限控制和安全设置。
+<p align="center">
+  基于 Cloudflare Workers 的匿名实时聊天室
+</p>
 
-⸻
+<p align="center">
+  <img src="https://img.shields.io/badge/Cloudflare-Workers-orange?logo=cloudflare" />
+  <img src="https://img.shields.io/badge/Database-D1-blue" />
+  <img src="https://img.shields.io/badge/Storage-R2-purple" />
+  <img src="https://img.shields.io/badge/Runtime-TypeScript-blue?logo=typescript" />
+  <img src="https://img.shields.io/badge/Status-Development-yellow" />
+</p>
 
-目录
+---
 
-* 功能介绍
-* 技术架构
-* 项目结构
-* 运行环境
-* Cloudflare 配置
-* 本地开发
-* 部署
-* 管理员后台
-* 安全与隐私
+## 目录
 
-⸻
+- [1. 项目介绍](#1-项目介绍)
+- [2. 项目目标](#2-项目目标)
+- [3. 功能特性](#3-功能特性)
+- [4. 技术架构](#4-技术架构)
+- [5. 项目结构](#5-项目结构)
+- [6. 环境要求](#6-环境要求)
+- [7. Cloudflare 资源配置](#7-cloudflare-资源配置)
+- [8. 环境变量](#8-环境变量)
+- [9. 数据库](#9-数据库)
+- [10. 本地开发](#10-本地开发)
+- [11. 部署指南](#11-部署指南)
+- [12. 用户功能](#12-用户功能)
+- [13. 管理员功能](#13-管理员功能)
+- [14. 举报与处罚系统](#14-举报与处罚系统)
+- [15. 图片系统](#15-图片系统)
+- [16. WebSocket 通信](#16-websocket-通信)
+- [17. API 接口](#17-api-接口)
+- [18. 安全机制](#18-安全机制)
+- [19. 隐私说明](#19-隐私说明)
+- [20. 测试清单](#20-测试清单)
+- [21. 已知限制](#21-已知限制)
+- [22. 后续开发计划](#22-后续开发计划)
+- [23. 常见问题](#23-常见问题)
+- [24. 许可证](#24-许可证)
 
-功能介绍
+---
 
-普通用户
+## 1. 项目介绍
 
-* 匿名浏览器 ID，无需注册账号。
-* 公共聊天室，支持 WebSocket 实时消息。
-* 自定义昵称。
-* 私信 API，支持持久化消息。
-* 查看在线用户信息。
-* 上传图片至 Cloudflare R2。
-* 举报其他用户。
-* 查看相关处理通知。
+**Anonymous Chat 3.0** 是一个基于 Cloudflare Workers 构建的匿名在线聊天平台。
 
-管理员
+项目旨在提供一个无需注册账号即可参与的公共聊天室，同时支持用户之间的私信、图片分享、消息举报以及管理员管理功能。
 
-* 独立管理员登录页面：/admin
-* 管理员密码验证。
-* 管理员会话管理，支持退出登录。
-* 查看举报记录。
-* 处理举报。
-* 查看访问记录。
-* 查看安全事件。
-* 查看处罚记录。
+与传统聊天平台不同，本项目使用浏览器生成的匿名 ID 识别用户，不要求用户提供邮箱或手机号。
 
-举报处理
+项目后端运行在 Cloudflare Workers 上，使用 Cloudflare D1 保存数据，并结合 Durable Objects 实现实时通信。
 
-目前支持以下处理类型：
+### 项目特点
 
-类型	说明
-none	不进行处罚
-warning	警告
-mute	禁言
-ban	封禁用户
-ip_ban	IP 指纹封禁
+- 无需传统账号注册。
+- 支持匿名公共聊天。
+- 支持用户之间的私信。
+- 支持图片上传。
+- 支持消息举报。
+- 提供管理员管理后台。
+- 支持用户处罚与通知。
+- 使用 Cloudflare 基础设施运行。
 
-具体处理结果以服务器实际实现为准。
+> 本项目目前仍处于开发和测试阶段，部分功能尚未完成完整验证。
 
-⸻
+---
 
-技术架构
+## 2. 项目目标
 
-技术	用途
-Cloudflare Workers	后端服务
-TypeScript	后端开发
-WebSocket	实时公共聊天
-Cloudflare D1	数据库
-Cloudflare R2	图片对象存储
-Durable Objects	聊天房间状态管理
-HTML / CSS / JavaScript	前端页面
-Wrangler	本地开发和部署
+本项目希望实现一个轻量、易部署、具有基本管理能力的匿名聊天系统。
 
-⸻
+主要目标：
 
-项目结构
+1. 降低用户参与聊天的门槛。
+2. 提供稳定的实时消息通信。
+3. 尽可能减少不必要的个人信息收集。
+4. 提供举报和管理员处理机制。
+5. 通过 Cloudflare 服务降低服务器维护成本。
+6. 保持代码结构清晰，方便后续维护和扩展。
 
+---
+
+## 3. 功能特性
+
+### 3.1 公共聊天室
+
+- WebSocket 实时通信。
+- 公共消息发送与接收。
+- 最近 300 条公共消息历史记录。
+- 匿名昵称。
+- 消息时间显示。
+- 在线连接数统计。
+
+### 3.2 匿名身份系统
+
+- 自动生成匿名用户 ID。
+- 使用浏览器 localStorage 保存用户 ID。
+- 支持设置和保存昵称。
+- 不需要传统账号注册。
+
+注意：匿名 ID 并不是可靠的身份认证机制。
+
+### 3.3 私信系统
+
+- 用户之间发送私信。
+- 根据用户 ID 查询相关消息。
+- 使用 API 读取私信记录。
+- 提供私信数据持久化能力。
+
+当前私信采用 API 读取模型，不代表已经实现完整的实时推送、已读状态和通知系统。
+
+### 3.4 图片系统
+
+- 图片上传至 Cloudflare R2。
+- 图片对象持久化保存。
+- 后端对上传请求进行检查。
+- 支持配置最大图片大小。
+
+图片上传、读取、删除以及消息展示的完整联动，需要根据当前部署版本逐项测试。
+
+### 3.5 举报系统
+
+- 用户可以举报其他用户。
+- 可以填写举报理由。
+- 举报信息保存到 D1。
+- 管理员可以查看举报记录。
+- 管理员可以处理举报。
+- 处理结果可以通知相关用户。
+
+### 3.6 管理系统
+
+- 管理员身份验证。
+- 管理员会话管理。
+- 举报管理。
+- 用户处罚管理。
+- 安全日志。
+- 管理员操作审计。
+
+---
+
+## 4. 技术架构
+
+| 技术 | 用途 |
+|---|---|
+| Cloudflare Workers | 后端运行环境 |
+| TypeScript | 后端业务逻辑 |
+| Cloudflare D1 | 数据库 |
+| Cloudflare R2 | 图片对象存储 |
+| Durable Objects | 实时聊天室协调 |
+| WebSocket | 实时消息通信 |
+| HTML / CSS / JavaScript | 前端界面 |
+| GitHub | 源代码管理 |
+| GitHub Actions | 自动化检查（如已配置） |
+
+### 系统结构
+
+```text
+                用户浏览器
+                    |
+                    |
+              Cloudflare Worker
+                    |
+          +---------+---------+
+          |         |         |
+          |         |         |
+         D1    Durable Objects R2
+          |         |         |
+          |         |         |
+       数据存储  WebSocket   图片存储
+          |
+          |
+       举报 / 私信
+       用户通知
+       管理记录
+```
+
+---
+
+## 5. 项目结构
+
+以下为逻辑结构示意，实际文件名以 GitHub 仓库为准。
+
+```text
 anonymous-chat/
+│
+├── src/
+│   ├── index.ts
+│   └── ...
+│
 ├── public/
 │   ├── index.html
-│   ├── admin.html
-│   └── admin.js
-├── src/
-│   └── index.ts
-├── package.json
+│   ├── style.css
+│   └── ...
+│
+├── migrations/
+│   └── ...
+│
 ├── wrangler.jsonc
-└── README.md
+├── package.json
+├── package-lock.json
+├── tsconfig.json
+├── README.md
+└── .gitignore
+```
 
-以上为主要文件示意，实际目录以仓库中的文件为准。
+---
 
-⸻
+## 6. 环境要求
 
-运行环境
+运行和部署项目需要：
 
-开始之前，需要准备：
+- Node.js LTS
+- npm
+- Cloudflare 账号
+- GitHub 账号
+- Cloudflare Workers
+- Cloudflare D1
+- Cloudflare R2
+- Durable Objects
 
-* Node.js
-* npm
-* Cloudflare 账号
-* Wrangler CLI
-* Cloudflare D1 数据库
-* Cloudflare R2 存储桶
-* Durable Objects
+首次部署建议使用电脑。
 
-⸻
+iPhone 和 iPad 可以用于访问网站、管理 GitHub 仓库及进行部分代码修改，但完整的本地开发和部署流程通常需要终端环境。
 
-Cloudflare 配置
+---
 
-1. D1 数据库
+## 7. Cloudflare 资源配置
 
-在 Cloudflare 创建 D1 数据库，并将绑定名称设置为：
+### 7.1 Workers
 
-CHAT_DB
+创建 Cloudflare Worker，用于运行后端 API 和提供网站服务。
 
-2. R2 存储桶
+### 7.2 D1
 
-创建 R2 Bucket，并配置 Worker 绑定：
+创建 D1 数据库，用于保存：
 
-{
-  "r2_buckets": [
-    {
-      "binding": "CHAT_IMAGES",
-      "bucket_name": "你的R2存储桶名称"
-    }
-  ]
-}
+- 公共聊天消息。
+- 私信记录。
+- 举报记录。
+- 用户处罚记录。
+- 用户通知。
+- 安全日志。
+- 管理员操作审计。
 
-注意：需要将这段配置合并到 wrangler.jsonc 的现有配置中，而不是直接覆盖整个文件。
+具体表名和字段以项目实际 migration 文件为准。
 
-3. Durable Objects
+### 7.3 R2
 
-需要配置以下绑定：
+创建 R2 Bucket，用于存储用户上传的图片。
 
-{
-  "durable_objects": {
-    "bindings": [
-      {
-        "name": "CHAT_ROOM",
-        "class_name": "ChatRoom"
-      }
-    ]
-  }
-}
+需要确认：
 
-同时需要保留项目已有的 Durable Objects migration 配置。
+- Bucket 名称与配置一致。
+- Worker 绑定名称与代码一致。
+- 上传大小限制符合预期。
+- 图片访问权限正确。
 
-4. Secrets
+### 7.4 Durable Objects
 
-在 Cloudflare Worker 中设置以下 Secrets：
+用于聊天室实时通信和连接协调。
 
-npx wrangler secret put ADMIN_PASSWORD
-npx wrangler secret put ADMIN_SESSION_SECRET
-npx wrangler secret put IP_HASH_SALT
+修改 Durable Objects 的绑定、类名或 SQLite schema 时，应先检查 Cloudflare migration 配置，避免影响现有数据。
 
-这些值应使用安全、独立的随机内容。
+---
 
-不要将真实密码、密钥或 Token 提交到 GitHub。
+## 8. 环境变量
 
-5. 环境变量
+项目涉及以下环境配置：
 
-项目使用以下配置：
+| 名称 | 类型 | 用途 |
+|---|---|---|
+| CHAT_DB | D1 Binding | 数据库 |
+| CHAT_IMAGES | R2 Binding | 图片存储 |
+| CHAT_ROOM | Durable Object Namespace | 聊天室通信 |
+| ASSETS | Assets Binding | 静态资源 |
+| MAX_IMAGE_BYTES | Variable | 图片大小限制 |
+| MESSAGE_LIMIT | Variable | 消息限制 |
+| ADMIN_PASSWORD | Secret | 管理员密码 |
+| ADMIN_SESSION_SECRET | Secret | 管理员会话密钥 |
+| IP_HASH_SALT | Secret | IP 指纹计算盐值 |
 
-MAX_IMAGE_BYTES=5242880
-MESSAGE_LIMIT=500
+具体配置以当前 Worker 代码和 wrangler.jsonc 为准。
 
-⸻
+**重要：**
 
-本地开发
+- 不要将管理员密码提交到 GitHub。
+- 不要公开 Secret。
+- 不要将真实密钥直接写入前端 JavaScript。
+- 不要在 README 中填写实际密码。
 
-1. 下载项目
+---
 
+## 9. 数据库
+
+项目使用 Cloudflare D1 保存业务数据。
+
+数据库涉及以下功能模块：
+
+| 模块 | 作用 |
+|---|---|
+| 公共消息 | 保存聊天室消息 |
+| 私信 | 保存用户之间的私信 |
+| 举报 | 保存用户提交的举报 |
+| 处罚 | 保存管理操作和处罚记录 |
+| 通知 | 保存用户相关通知 |
+| 访问日志 | 保存必要的安全记录 |
+| 管理审计 | 记录管理员操作 |
+
+数据库结构应以 migrations 中的 SQL 文件为准。
+
+不要随意删除生产环境数据库或重新初始化已有数据库。
+
+---
+
+## 10. 本地开发
+
+克隆仓库：
+
+```bash
 git clone https://github.com/Fzhai0110/anonymous-chat.git
+```
+
+进入目录：
+
+```bash
 cd anonymous-chat
+```
 
-2. 安装依赖
+安装依赖：
 
+```bash
 npm install
+```
 
-3. 本地数据库迁移
+登录 Cloudflare：
 
-npm run db:local
+```bash
+npx wrangler login
+```
 
-4. 启动开发服务器
+运行本地开发：
 
+```bash
 npm run dev
+```
 
-⸻
+数据库迁移脚本：
 
-部署
+```bash
+npm run db:local
+```
 
-1. 检查配置
+以上命令需要与 package.json 中实际定义的 scripts 保持一致。
 
-部署之前，请确认：
+---
 
-* wrangler.jsonc 中的 Worker 名称正确。
-* D1 数据库绑定正确。
-* R2 Bucket 绑定正确。
-* Durable Objects 绑定和 migration 正确。
-* 必需的 Secrets 已设置。
+## 11. 部署指南
 
-2. 执行远程数据库迁移
+### 第一步：检查配置
 
+检查：
+
+- wrangler.jsonc
+- package.json
+- 数据库 ID
+- D1 绑定
+- R2 绑定
+- Durable Objects 绑定
+- 所需 Secrets
+
+### 第二步：登录 Cloudflare
+
+```bash
+npx wrangler login
+```
+
+### 第三步：执行数据库迁移
+
+```bash
 npm run db:remote
+```
 
-3. 部署 Worker
+### 第四步：部署 Worker
 
+```bash
 npm run deploy
+```
 
-部署后，请检查聊天室、图片上传、举报提交和管理员登录是否正常。
+### 第五步：检查网站
 
-⸻
+部署完成后，通过 Cloudflare Dashboard 获取 Worker 地址。
 
-npm 命令
+检查：
 
-命令	用途
-npm run dev	启动本地开发服务器
-npm run deploy	部署 Worker
-npm run db:local	执行本地 D1 迁移
-npm run db:remote	执行远程 D1 迁移
-npm run typecheck	TypeScript 类型检查
+- 网站是否正常打开。
+- 公共聊天是否正常。
+- WebSocket 是否成功连接。
+- 消息是否可以发送。
+- 举报是否可以提交。
+- 管理员后台是否正常。
+- 图片功能是否正常。
 
-⸻
+---
 
-管理员后台
+## 12. 用户功能
 
-访问：
+### 匿名身份
 
-https://你的Worker域名/admin
+用户第一次访问网站时，前端会生成匿名 ID。
 
-使用管理员密码登录。
+匿名 ID 保存在浏览器 localStorage 中。
 
-后台目前包含：
+清除网站数据后，匿名身份可能丢失。
 
-* Dashboard
-* Reports
-* Visitors
-* Security
-* Sanctions
+### 公共聊天
 
-管理员会话由服务器验证。请勿将管理员密码分享给其他人。
+用户可以：
 
-⸻
+1. 设置昵称。
+2. 进入公共聊天室。
+3. 发送消息。
+4. 接收其他用户的消息。
+5. 查看消息时间。
+6. 查看在线连接数。
 
-安全与隐私
+### 私信
 
-项目包含以下安全相关设计：
+用户可以通过私信 API 与其他用户交流。
 
-* 匿名浏览器 ID。
-* 管理员密码验证。
-* HttpOnly、Secure、SameSite Strict 会话 Cookie。
-* 管理员 API 会话验证。
-* IP 地址使用带盐 SHA-256 生成指纹。
-* 访问记录定期清理。
-* 举报和处罚记录。
+私信读取必须进行服务端权限检查，不能仅依靠前端隐藏内容。
 
-隐私说明：
+### 举报
 
-项目使用 IP 指纹辅助安全管理，不代表完全匿名，也不代表不会产生其他访问日志。
+用户可以通过消息旁边的举报入口提交举报理由。
 
-本项目目前不应被视为已经通过专业安全审计的生产级系统。
+提交成功后，系统应返回相应提示。
 
-⸻
+---
 
-自动部署
+## 13. 管理员功能
 
-可以通过 GitHub 与 Cloudflare Workers 的部署集成实现自动部署。
+管理员后台用于处理聊天室中的违规行为和用户举报。
 
-请在 Cloudflare 中检查 GitHub 仓库连接、构建配置和部署目标，确保部署的是正确的 Worker。
+管理功能涉及：
 
-⸻
+- 管理员身份验证。
+- 举报记录查看。
+- 举报处理。
+- 用户处罚。
+- 用户通知。
+- 安全日志。
+- 操作审计。
 
-项目地址
+管理员 API 必须在服务端进行权限验证。
 
-GitHub：
+仅隐藏前端管理入口并不能保护后台接口。
 
-https://github.com/Fzhai0110/anonymous-chat
+---
 
-Cloudflare Workers：
+## 14. 举报与处罚系统
 
-https://workers.cloudflare.com/
+### 举报流程
 
-Wrangler 文档：
+```text
+用户发现违规行为
+        |
+        v
+    提交举报
+        |
+        v
+    保存到 D1
+        |
+        v
+   管理员查看举报
+        |
+        v
+     处理举报
+        |
+        v
+    记录管理操作
+        |
+        v
+    通知相关用户
+```
 
-https://developers.cloudflare.com/workers/wrangler/
+### 处罚类型
 
-Cloudflare D1：
+项目数据结构涉及：
 
-https://developers.cloudflare.com/d1/
+- Mute：禁言。
+- Ban：用户封禁。
+- IP Ban：IP 指纹封禁。
 
-Cloudflare R2：
+处罚的实际生效范围、到期时间和解除机制必须由服务端执行。
 
-https://developers.cloudflare.com/r2/
+IP 指纹不是用户真实身份，也不能保证准确识别某个具体的人。
 
-⸻
+IP 级处罚可能影响使用同一网络的其他用户，因此需要谨慎使用。
 
-License
+---
 
-如需公开分发或允许他人使用，请在仓库中明确添加许可证。
+## 15. 图片系统
+
+项目使用 Cloudflare R2 保存上传图片。
+
+图片上传需要进行服务端验证，包括：
+
+- 文件类型。
+- 文件大小。
+- 上传权限。
+- 请求频率。
+- 对象存储访问控制。
+
+不能只相信浏览器提交的 MIME 类型。
+
+图片功能还需要检查：
+
+1. 上传后能否正确保存。
+2. 图片地址能否正常访问。
+3. 前端能否正确显示图片。
+4. 删除操作是否同步处理对象。
+5. 举报和图片内容之间是否建立正确关联。
+
+---
+
+## 16. WebSocket 通信
+
+公共聊天室使用 WebSocket 实现实时通信。
+
+基本流程：
+
+```text
+用户打开网站
+      |
+      v
+建立 WebSocket 连接
+      |
+      v
+发送聊天消息
+      |
+      v
+服务器验证消息
+      |
+      v
+广播给聊天室用户
+      |
+      v
+其他用户接收消息
+```
+
+需要注意：
+
+- 服务端必须验证消息内容。
+- 必须限制消息长度。
+- 必须处理断开连接。
+- 必须检查用户处罚状态。
+- 不应仅依赖前端限制违规操作。
+
+在线连接数不一定等于真实在线人数。
+
+---
+
+## 17. API 接口
+
+项目包含公共聊天、私信、举报和管理员相关 API。
+
+主要接口类别：
+
+| 类别 | 功能 |
+|---|---|
+| Chat API | 公共消息和聊天记录 |
+| WebSocket API | 实时通信 |
+| DM API | 私信发送与读取 |
+| Report API | 提交举报 |
+| Admin API | 管理员操作 |
+| Notice API | 用户通知 |
+| Image API | 图片上传及读取 |
+
+实际 URL、HTTP 方法、请求参数和返回结构应以当前 Worker 源码为准。
+
+不要仅根据此表推断尚未确认的接口路径。
+
+---
+
+## 18. 安全机制
+
+项目需要关注以下安全问题：
+
+### 输入验证
+
+所有用户输入都必须经过服务端验证。
+
+### 权限验证
+
+管理员接口不能依赖前端权限判断。
+
+### 会话安全
+
+管理员会话需要具备有效期和安全验证。
+
+### 请求限制
+
+聊天、私信、举报和图片上传接口应具备合理的频率限制。
+
+### IP 指纹
+
+使用带盐 SHA-256 指纹处理 IP 相关数据。
+
+不要保存或公开不必要的明文 IP。
+
+### WebSocket 安全
+
+WebSocket 消息同样需要执行权限和处罚检查。
+
+### 数据保护
+
+限制管理员数据和安全日志的访问范围。
+
+---
+
+## 19. 隐私说明
+
+Anonymous Chat 3.0 使用匿名 ID 提供聊天功能，但匿名不代表完全无法关联访问记录。
+
+用户需要了解：
+
+- 匿名 ID 保存在浏览器本地。
+- 聊天消息会被保存。
+- 私信不是端到端加密。
+- IP 指纹可能属于可关联的在线标识。
+- 图片可能保存在对象存储中。
+- 管理员可能需要查看举报及相关管理记录。
+
+项目部署者应向用户说明数据用途、保存期限和管理方式。
+
+---
+
+## 20. 测试清单
+
+### 公共聊天
+
+- [ ] 两个不同浏览器可以互相发送消息。
+- [ ] 消息历史正常。
+- [ ] 页面刷新后聊天记录仍然存在。
+- [ ] WebSocket 断开后可以恢复。
+- [ ] 在线连接数正常更新。
+- [ ] 超长消息受到限制。
+
+### 私信
+
+- [ ] 私信可以正常发送。
+- [ ] 私信可以正常读取。
+- [ ] 不允许读取其他用户的私信。
+- [ ] 用户身份验证正常。
+
+### 举报
+
+- [ ] 举报按钮正常显示。
+- [ ] 举报表单可以提交。
+- [ ] 提交成功提示正常。
+- [ ] D1 中存在对应记录。
+- [ ] 管理员后台可以查看举报。
+- [ ] 管理员处理操作正常。
+- [ ] 相关通知可以读取。
+
+### 管理员
+
+- [ ] 管理员登录正常。
+- [ ] 未授权用户无法访问管理 API。
+- [ ] 管理操作正常。
+- [ ] 管理操作写入审计记录。
+- [ ] 会话失效机制正常。
+
+### 图片
+
+- [ ] 图片上传正常。
+- [ ] 超出大小限制的文件被拒绝。
+- [ ] 非法文件类型被拒绝。
+- [ ] 图片读取正常。
+- [ ] 图片显示正常。
+
+### 安全
+
+- [ ] 检查越权访问。
+- [ ] 检查请求频率限制。
+- [ ] 检查 WebSocket 权限。
+- [ ] 检查处罚执行逻辑。
+- [ ] 检查日志保留期限。
+- [ ] 检查 Secret 是否泄露。
+
+---
+
+## 21. 已知限制
+
+当前项目仍需要进一步验证：
+
+1. 完整的多人端到端测试。
+2. 私信实时推送及已读状态。
+3. 图片消息的完整展示和删除联动。
+4. 完整处罚管理界面。
+5. WebSocket 处罚检查的完整覆盖。
+6. API 的全面安全测试。
+7. 管理员权限和会话机制的完整验证。
+8. 不同浏览器和设备之间的兼容性。
+
+这些事项不代表相关功能一定不存在，而是尚不能仅凭 README 确认已经全部完成。
+
+---
+
+## 22. 后续开发计划
+
+以下是可以考虑的后续开发方向：
+
+### 用户体验
+
+- [ ] 优化移动端界面。
+- [ ] 优化消息展示。
+- [ ] 增加消息状态提示。
+- [ ] 优化图片预览。
+- [ ] 改进私信体验。
+
+### 管理系统
+
+- [ ] 完善处罚管理界面。
+- [ ] 优化举报处理流程。
+- [ ] 增加更清晰的管理日志展示。
+- [ ] 完善用户通知。
+
+### 安全
+
+- [ ] 完善 API 速率限制。
+- [ ] 完善 WebSocket 权限检查。
+- [ ] 完善会话安全。
+- [ ] 完善数据清理机制。
+- [ ] 进行全面安全测试。
+
+---
+
+## 23. 常见问题
+
+### Q1：使用网站需要注册账号吗？
+
+不需要。项目使用浏览器匿名 ID 识别用户。
+
+### Q2：清除浏览器数据会发生什么？
+
+本地匿名 ID 可能丢失，浏览器可能被识别为新的匿名用户。
+
+### Q3：聊天内容是否端到端加密？
+
+当前项目不能被描述为端到端加密聊天系统。
+
+### Q4：为什么在线人数和实际人数可能不同？
+
+当前统计可能基于 WebSocket 连接数，而不是去重后的用户数量。
+
+### Q5：为什么管理员看不到举报？
+
+建议检查：
+
+- 管理员身份验证。
+- Worker 日志。
+- D1 举报记录。
+- 管理员 API 返回结果。
+- 前端后台页面的数据加载逻辑。
+
+### Q6：部署失败怎么办？
+
+优先检查：
+
+- wrangler.jsonc。
+- package.json。
+- D1 数据库绑定。
+- Durable Objects 绑定。
+- Cloudflare Worker 日志。
+- GitHub Actions 检查结果。
+
+不要在没有备份的情况下重置生产数据库。
+
+---
+
+## 24. 许可证
+
+本项目许可证及使用条件以仓库实际提供的 LICENSE 文件为准。
+
+如果仓库尚未添加 LICENSE 文件，请不要默认将项目标记为 MIT 或其他开源许可证。
+
+---
+
+<p align="center">
+  <strong>Anonymous Chat 3.0</strong>
+  <br />
+  Built with Cloudflare Workers
+</p>
