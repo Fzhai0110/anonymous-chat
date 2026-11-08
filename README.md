@@ -1,8 +1,26 @@
 Anonymous Chat 3.0
 
-基于 Cloudflare Workers 的轻量匿名聊天室项目，使用 WebSocket、D1、R2 和 Durable Objects 提供聊天及管理功能。
+基于 Cloudflare Workers 构建的轻量级匿名聊天室，使用 WebSocket、D1、R2 和 Durable Objects 提供聊天、图片上传及管理功能。
 
-项目状态： 本项目仍在开发和测试中，尚未经过完整安全审计。公开使用前，请完成部署检查和安全测试。
+项目状态：开发与测试中
+
+项目尚未完成完整的安全审计。正式公开使用前，请检查 Cloudflare 配置、权限控制和安全设置。
+
+⸻
+
+目录
+
+* 功能介绍
+* 技术架构
+* 项目结构
+* 运行环境
+* Cloudflare 配置
+* 本地开发
+* 部署
+* 管理员后台
+* 安全与隐私
+
+⸻
 
 功能介绍
 
@@ -10,150 +28,273 @@ Anonymous Chat 3.0
 
 * 匿名浏览器 ID，无需注册账号。
 * 公共聊天室，支持 WebSocket 实时消息。
-* 昵称设置。
+* 自定义昵称。
 * 私信 API，支持持久化消息。
-* 在线用户信息。
-* 图片上传至 Cloudflare R2。
-* 举报用户。
+* 查看在线用户信息。
+* 上传图片至 Cloudflare R2。
+* 举报其他用户。
 * 查看相关处理通知。
 
 管理员
 
 * 独立管理员登录页面：/admin
-* 管理员密码登录。
-* 8 小时登录会话。
-* 安全退出登录。
-* Dashboard。
-* 举报管理。
-* 访问记录。
-* 安全中心。
-* 处罚记录。
-* 管理员 API 支持举报处理及处罚操作。
+* 管理员密码验证。
+* 管理员会话管理，支持退出登录。
+* 查看举报记录。
+* 处理举报。
+* 查看访问记录。
+* 查看安全事件。
+* 查看处罚记录。
 
-注意：当前管理页面提供基础举报查看和“警告并处理”操作。完整处罚表单、申诉流程等仍需继续开发。
+举报处理
+
+目前支持以下处理类型：
+
+类型	说明
+none	不进行处罚
+warning	警告
+mute	禁言
+ban	封禁用户
+ip_ban	IP 指纹封禁
+
+具体处理结果以服务器实际实现为准。
+
+⸻
 
 技术架构
 
 技术	用途
 Cloudflare Workers	后端服务
+TypeScript	后端开发
+WebSocket	实时公共聊天
 Cloudflare D1	数据库
-Cloudflare R2	图片存储
-Durable Objects	聊天连接管理
-TypeScript	后端代码
-JavaScript	前端逻辑
-Wrangler	本地开发与部署
+Cloudflare R2	图片对象存储
+Durable Objects	聊天房间状态管理
+HTML / CSS / JavaScript	前端页面
+Wrangler	本地开发和部署
 
-管理员登录
+⸻
 
-访问：
+项目结构
 
-https://你的域名/admin
+anonymous-chat/
+├── public/
+│   ├── index.html
+│   ├── admin.html
+│   └── admin.js
+├── src/
+│   └── index.ts
+├── package.json
+├── wrangler.jsonc
+└── README.md
 
-输入管理员密码即可登录。
+以上为主要文件示意，实际目录以仓库中的文件为准。
 
-需要在 Cloudflare Worker Secrets 中配置：
+⸻
 
-* ADMIN_PASSWORD：管理员密码。
-* ADMIN_SESSION_SECRET：管理员会话签名密钥。
-* IP_HASH_SALT：IP 哈希盐值。
+运行环境
 
-管理员会话有效期为 8 小时。
+开始之前，需要准备：
 
-不要将这些 Secret 写入 GitHub 或公开分享。
+* Node.js
+* npm
+* Cloudflare 账号
+* Wrangler CLI
+* Cloudflare D1 数据库
+* Cloudflare R2 存储桶
+* Durable Objects
 
-Cloudflare 资源配置
+⸻
 
-需要准备：
+Cloudflare 配置
 
-1. D1 数据库，绑定名称 CHAT_DB。
-2. R2 Bucket，绑定名称 CHAT_IMAGES。
-3. Durable Object，绑定名称 CHAT_ROOM，类名 ChatRoom。
+1. D1 数据库
 
-普通变量：
+在 Cloudflare 创建 D1 数据库，并将绑定名称设置为：
 
-* MAX_IMAGE_BYTES：图片大小限制，当前示例为 5242880。
-* MESSAGE_LIMIT：消息长度限制，当前示例为 500。
+CHAT_DB
 
-请核对 wrangler.jsonc 中的数据库 ID、Worker 名称及所有资源绑定。
+2. R2 存储桶
+
+创建 R2 Bucket，并配置 Worker 绑定：
+
+{
+  "r2_buckets": [
+    {
+      "binding": "CHAT_IMAGES",
+      "bucket_name": "你的R2存储桶名称"
+    }
+  ]
+}
+
+注意：需要将这段配置合并到 wrangler.jsonc 的现有配置中，而不是直接覆盖整个文件。
+
+3. Durable Objects
+
+需要配置以下绑定：
+
+{
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "CHAT_ROOM",
+        "class_name": "ChatRoom"
+      }
+    ]
+  }
+}
+
+同时需要保留项目已有的 Durable Objects migration 配置。
+
+4. Secrets
+
+在 Cloudflare Worker 中设置以下 Secrets：
+
+npx wrangler secret put ADMIN_PASSWORD
+npx wrangler secret put ADMIN_SESSION_SECRET
+npx wrangler secret put IP_HASH_SALT
+
+这些值应使用安全、独立的随机内容。
+
+不要将真实密码、密钥或 Token 提交到 GitHub。
+
+5. 环境变量
+
+项目使用以下配置：
+
+MAX_IMAGE_BYTES=5242880
+MESSAGE_LIMIT=500
+
+⸻
 
 本地开发
 
-需要安装 Node.js LTS 和 Wrangler。
+1. 下载项目
 
-安装依赖：
+git clone https://github.com/Fzhai0110/anonymous-chat.git
+cd anonymous-chat
+
+2. 安装依赖
 
 npm install
 
-登录 Cloudflare：
+3. 本地数据库迁移
 
-npx wrangler login
+npm run db:local
 
-本地运行：
+4. 启动开发服务器
 
 npm run dev
 
-应用远程数据库迁移：
+⸻
+
+部署
+
+1. 检查配置
+
+部署之前，请确认：
+
+* wrangler.jsonc 中的 Worker 名称正确。
+* D1 数据库绑定正确。
+* R2 Bucket 绑定正确。
+* Durable Objects 绑定和 migration 正确。
+* 必需的 Secrets 已设置。
+
+2. 执行远程数据库迁移
 
 npm run db:remote
 
-部署：
+3. 部署 Worker
 
 npm run deploy
 
-package.json 命令
+部署后，请检查聊天室、图片上传、举报提交和管理员登录是否正常。
 
-命令	作用
-npm run dev	本地开发
+⸻
+
+npm 命令
+
+命令	用途
+npm run dev	启动本地开发服务器
 npm run deploy	部署 Worker
-npm run db:local	本地数据库迁移
-npm run db:remote	远程数据库迁移
+npm run db:local	执行本地 D1 迁移
+npm run db:remote	执行远程 D1 迁移
 npm run typecheck	TypeScript 类型检查
 
-部署前请检查 wrangler.jsonc 中的 name。当前仓库配置曾使用 chatbeta，请确认它与你准备部署的 Worker 一致，避免部署到错误的 Worker。
+⸻
 
-安全测试清单
+管理员后台
 
-* [ ]	两个浏览器之间可以正常聊天。
-* [ ]	刷新后公共消息历史正常。
-* [ ]	WebSocket 断开后连接数恢复。
-* [ ]	图片上传正常。
-* [ ]	私信只能由相关用户读取。
-* [ ]	举报可以正常提交。
-* [ ]	管理员可以查看举报。
-* [ ]	举报处理后通知正常。
-* [ ]	未登录用户无法访问管理员 API。
-* [ ]	退出登录后管理员会话失效。
-* [ ]	检查处罚到期和解除。
-* [ ]	检查管理员操作审计记录。
+访问：
 
-隐私与安全说明
+https://你的Worker域名/admin
 
-* 匿名 ID 保存在浏览器 localStorage 中，不是可靠的账号身份认证。
-* 聊天消息和私信不是端到端加密。
-* IP 指纹是带盐哈希后的可关联标识，不等于真实身份。
-* 访问日志应限制访问权限，并制定数据保留期限。
-* 当前 visitor_logs 会清理超过 7 天的记录。
-* IP 封禁可能影响使用同一网络的其他用户，应谨慎使用。
-* 上线前仍需评估速率限制、滥用防护、数据备份和删除机制。
+使用管理员密码登录。
 
-本项目不应被视为经过完整安全审计的生产系统。请在获得许可的范围内使用。
+后台目前包含：
+
+* Dashboard
+* Reports
+* Visitors
+* Security
+* Sanctions
+
+管理员会话由服务器验证。请勿将管理员密码分享给其他人。
+
+⸻
+
+安全与隐私
+
+项目包含以下安全相关设计：
+
+* 匿名浏览器 ID。
+* 管理员密码验证。
+* HttpOnly、Secure、SameSite Strict 会话 Cookie。
+* 管理员 API 会话验证。
+* IP 地址使用带盐 SHA-256 生成指纹。
+* 访问记录定期清理。
+* 举报和处罚记录。
+
+隐私说明：
+
+项目使用 IP 指纹辅助安全管理，不代表完全匿名，也不代表不会产生其他访问日志。
+
+本项目目前不应被视为已经通过专业安全审计的生产级系统。
+
+⸻
 
 自动部署
 
-可以在 Cloudflare Dashboard 配置 GitHub 集成和 Workers Builds。
+可以通过 GitHub 与 Cloudflare Workers 的部署集成实现自动部署。
 
-请确认：
+请在 Cloudflare 中检查 GitHub 仓库连接、构建配置和部署目标，确保部署的是正确的 Worker。
 
-* GitHub 仓库和分支正确。
-* Worker 名称正确。
-* Secrets 已配置。
-* D1、R2 和 Durable Objects 绑定正确。
-* 部署后完成基本功能测试。
+⸻
 
-相关链接
+项目地址
 
-* GitHub：https://github.com/Fzhai0110/anonymous-chat
-* Cloudflare Workers：https://developers.cloudflare.com/workers/
-* Cloudflare D1：https://developers.cloudflare.com/d1/
-* Cloudflare R2：https://developers.cloudflare.com/r2/
-* Wrangler：https://developers.cloudflare.com/workers/wrangler/
+GitHub：
+
+https://github.com/Fzhai0110/anonymous-chat
+
+Cloudflare Workers：
+
+https://workers.cloudflare.com/
+
+Wrangler 文档：
+
+https://developers.cloudflare.com/workers/wrangler/
+
+Cloudflare D1：
+
+https://developers.cloudflare.com/d1/
+
+Cloudflare R2：
+
+https://developers.cloudflare.com/r2/
+
+⸻
+
+License
+
+如需公开分发或允许他人使用，请在仓库中明确添加许可证。
